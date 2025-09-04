@@ -1,0 +1,129 @@
+---
+- name: Install RKE2 Server on GPU Node
+  hosts: gpu_nodes
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: Create RKE2 config directory
+      file:
+        path: /etc/rancher/rke2
+        state: directory
+        mode: '0755'
+
+    - name: Create RKE2 server configuration for GPU node
+      copy:
+        content: |
+          write-kubeconfig-mode: "0644"
+          tls-san:
+            - "{{ ansible_default_ipv4.address }}"
+            - "{{ ansible_fqdn }}"
+          cluster-cidr: "10.42.0.0/16"
+          service-cidr: "10.43.0.0/16"
+          cluster-dns: "10.43.0.10"
+          node-label:
+            - "node-type=gpu"
+            - "nvidia.com/gpu=true"
+        dest: /etc/rancher/rke2/config.yaml
+        mode: '0600'
+
+    - name: Download RKE2 installation script
+      get_url:
+        url: https://get.rke2.io
+        dest: /tmp/install-rke2.sh
+        mode: '0755'
+
+    - name: Install RKE2 server
+      shell: |
+        INSTALL_RKE2_TYPE="server" /tmp/install-rke2.sh
+      args:
+        creates: /usr/local/bin/rke2-server
+
+    - name: Enable and start rke2-server service
+      systemd:
+        name: rke2-server
+        enabled: yes
+        state: started
+
+    - name: Wait for RKE2 to be ready
+      wait_for:
+        port: 6443
+        host: 127.0.0.1
+        delay: 30
+        timeout: 300
+
+    - name: Create kubectl symlink
+      file:
+        src: /var/lib/rancher/rke2/bin/kubectl
+        dest: /usr/local/bin/kubectl
+        state: link
+
+    - name: Set KUBECONFIG environment for all users
+      lineinfile:
+        path: /etc/environment
+        line: "KUBECONFIG=/etc/rancher/rke2/rke2.yaml"
+        create: yes
+
+    - name: Verify RKE2 installation
+      shell: |
+        KUBECONFIG=/etc/rancher/rke2/rke2.yaml /var/lib/rancher/rke2/bin/kubectl get nodes -o wide
+      register: cluster_status
+      changed_when: false
+
+    - name: Display cluster status
+      debug:
+        msg: "{{ cluster_status.stdout_lines }}"
+
+    - name: Install local-path storage provisioner
+      shell: |
+        KUBECONFIG=/etc/rancher/rke2/rke2.yaml /var/lib/rancher/rke2/bin/kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.26/deploy/local-path-storage.yaml
+      ignore_errors: yes
+
+    - name: Wait for local-path-provisioner to be ready
+      shell: |
+        KUBECONFIG=/etc/rancher/rke2/rke2.yaml /var/lib/rancher/rke2/bin/kubectl wait --for=condition=available deployment/local-path-provisioner -n local-path-storage --timeout=300s
+      ignore_errors: yes
+
+    - name: Set local-path as default storage class
+      shell: |
+        KUBECONFIG=/etc/rancher/rke2/rke2.yaml /var/lib/rancher/rke2/bin/kubectl patch storageclass local-path -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+      ignore_errors: yes
+
+    - name: Install NVIDIA GPU device plugin
+      shell: |
+        KUBECONFIG=/etc/rancher/rke2/rke2.yaml /var/lib/rancher/rke2/bin/kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.5/nvidia-device-plugin.yml
+      ignore_errors: yes
+
+    - name: Wait for NVIDIA device plugin to be ready
+      shell: |
+        KUBECONFIG=/etc/rancher/rke2/rke2.yaml /var/lib/rancher/rke2/bin/kubectl wait --for=condition=ready pod -l name=nvidia-device-plugin-ds -n kube-system --timeout=300s
+      ignore_errors: yes
+
+    - name: Verify GPU resources are available
+      shell: |
+        KUBECONFIG=/etc/rancher/rke2/rke2.yaml /var/lib/rancher/rke2/bin/kubectl describe nodes | grep -A 5 "nvidia.com/gpu"
+      register: gpu_resources
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Display GPU resources
+      debug:
+        msg: "{{ gpu_resources.stdout_lines | default(['No GPU resources found yet']) }}"
+
+    - name: Get node token for future use
+      shell: |
+        cat /var/lib/rancher/rke2/server/node-token
+      register: gpu_node_token
+      changed_when: false
+
+    - name: Display node token
+      debug:
+        msg: "GPU cluster node token: {{ gpu_node_token.stdout }}"
+
+    - name: Display GPU cluster access information
+      debug:
+        msg:
+          - "GPU RKE2 cluster is ready!"
+          - "Cluster IP: {{ ansible_default_ipv4.address }}"
+          - "Kubeconfig: /etc/rancher/rke2/rke2.yaml"
+          - "Access: kubectl --kubeconfig=/etc/rancher/rke2/rke2.yaml get nodes"
+          - "This cluster can be imported into Rancher for management"

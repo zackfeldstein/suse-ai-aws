@@ -1,0 +1,117 @@
+---
+- name: Create RKE2 config directory
+  file:
+    path: /etc/rancher/rke2
+    state: directory
+    mode: '0755'
+
+- name: Create RKE2 agent configuration
+  copy:
+    content: |
+      server: https://{{ hostvars[groups['rancher_servers'][0]]['private_ip'] }}:9345
+      token: {{ hostvars[groups['rancher_servers'][0]]['node_token']['stdout'] }}
+      node-label:
+        - "node-type=gpu"
+        - "nvidia.com/gpu=true"
+      node-taint:
+        - "nvidia.com/gpu=true:NoSchedule"
+    dest: /etc/rancher/rke2/config.yaml
+    mode: '0600'
+
+- name: Download RKE2 installation script
+  get_url:
+    url: https://get.rke2.io
+    dest: /tmp/install-rke2.sh
+    mode: '0755'
+
+- name: Install RKE2 agent
+  shell: |
+    INSTALL_RKE2_TYPE="agent" /tmp/install-rke2.sh
+  args:
+    creates: /usr/local/bin/rke2-agent
+
+- name: Enable and start rke2-agent service
+  systemd:
+    name: rke2-agent
+    enabled: yes
+    state: started
+
+- name: Wait for RKE2 agent to be ready
+  wait_for:
+    port: 10250
+    host: "{{ ansible_default_ipv4.address }}"
+    timeout: 300
+    delay: 30
+
+- name: Create kubectl symlink
+  file:
+    src: /var/lib/rancher/rke2/bin/kubectl
+    dest: /usr/local/bin/kubectl
+    state: link
+  ignore_errors: yes
+
+- name: Set KUBECONFIG environment for all users
+  lineinfile:
+    path: /etc/environment
+    line: "KUBECONFIG=/etc/rancher/rke2/rke2.yaml"
+    create: yes
+
+- name: Verify RKE2 agent installation
+  shell: |
+    systemctl is-active rke2-agent
+  register: rke2_agent_status
+  changed_when: false
+
+- name: Display RKE2 agent status
+  debug:
+    msg: "RKE2 agent status: {{ rke2_agent_status.stdout }}"
+
+- name: Wait for node to appear in cluster (from server)
+  shell: |
+    /var/lib/rancher/rke2/bin/kubectl get nodes -o wide
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: cluster_nodes
+  delegate_to: "{{ groups['rancher_servers'][0] }}"
+  changed_when: false
+  retries: 10
+  delay: 30
+  until: inventory_hostname in cluster_nodes.stdout or ansible_hostname in cluster_nodes.stdout
+
+- name: Display cluster nodes
+  debug:
+    msg: "{{ cluster_nodes.stdout_lines }}"
+  delegate_to: "{{ groups['rancher_servers'][0] }}"
+
+- name: Install NVIDIA GPU device plugin (from server)
+  shell: |
+    /var/lib/rancher/rke2/bin/kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.5/nvidia-device-plugin.yml
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  delegate_to: "{{ groups['rancher_servers'][0] }}"
+  run_once: true
+  ignore_errors: yes
+
+- name: Wait for NVIDIA device plugin to be ready
+  shell: |
+    /var/lib/rancher/rke2/bin/kubectl wait --for=condition=ready pod -l name=nvidia-device-plugin-ds -n kube-system --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  delegate_to: "{{ groups['rancher_servers'][0] }}"
+  run_once: true
+  ignore_errors: yes
+
+- name: Verify GPU resources are available in cluster
+  shell: |
+    /var/lib/rancher/rke2/bin/kubectl describe nodes | grep -A 5 "nvidia.com/gpu"
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: gpu_resources
+  delegate_to: "{{ groups['rancher_servers'][0] }}"
+  changed_when: false
+  ignore_errors: yes
+
+- name: Display GPU resources
+  debug:
+    msg: "{{ gpu_resources.stdout_lines | default(['No GPU resources found yet']) }}"
+  delegate_to: "{{ groups['rancher_servers'][0] }}"

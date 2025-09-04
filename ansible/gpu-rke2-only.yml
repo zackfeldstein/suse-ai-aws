@@ -1,0 +1,7 @@
+---
+- name: Install RKE2 Agent on GPU Node Only
+  hosts: gpu_nodes
+  become: yes
+  gather_facts: yes
+  tasks:
+    - include_tasks: playbooks/rke2-agent.yml

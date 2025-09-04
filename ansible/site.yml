@@ -1,0 +1,57 @@
+---
+- name: Configure all hosts
+  hosts: all
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: Update hosts file for demo.rancher.com
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ hostvars[groups['rancher_servers'][0]]['ansible_host'] }} {{ rancher_domain }}"
+        state: present
+        backup: yes
+      when: groups['rancher_servers'] | length > 0
+
+    - name: Set timezone
+      file:
+        src: /usr/share/zoneinfo/{{ timezone }}
+        dest: /etc/localtime
+        state: link
+        force: yes
+
+    - name: Update system packages
+      zypper:
+        name: '*'
+        state: latest
+        update_cache: yes
+
+    - name: Install common packages
+      zypper:
+        name:
+          - curl
+          - wget
+          - vim
+          - git
+          - unzip
+          - python3
+          - which
+          - net-tools
+        state: present
+
+- name: Setup Rancher Server with RKE2
+  hosts: rancher_servers
+  become: yes
+  gather_facts: yes
+  vars_files:
+    - group_vars/secrets.yml
+  tasks:
+    - include_tasks: playbooks/rke2-server.yml
+    - include_tasks: playbooks/rancher-install.yml
+
+- name: Setup GPU Nodes
+  hosts: gpu_nodes
+  become: yes
+  gather_facts: yes
+  tasks:
+    - include_tasks: playbooks/nvidia-drivers.yml
+    - include_tasks: playbooks/rke2-agent.yml

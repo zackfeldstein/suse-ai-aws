@@ -1,0 +1,24 @@
+---
+# Global variables for all hosts
+rancher_domain: demo.rancher.com
+rancher_version: "2.11.3"
+rke2_version: "v1.28.5+rke2r1"
+cert_manager_version: "v1.13.0"
+
+# Rancher Prime settings
+rancher_prime_enabled: false
+rancher_helm_repo: "https://charts.rancher.com/server-charts/prime"
+certmanager_helm_chart: "oci://dp.apps.rancher.io/charts/cert-manager"
+certmanager_namespace: "cert-manager"
+image_pull_secret_name: "app-collection-secret"
+
+# Network settings
+cluster_cidr: "10.42.0.0/16"
+service_cidr: "10.43.0.0/16"
+
+# SSL/TLS settings
+use_letsencrypt: false  # Set to true for production
+letsencrypt_email: "admin@example.com"
+
+# System settings
+timezone: "UTC"

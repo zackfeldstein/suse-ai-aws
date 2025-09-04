@@ -1,0 +1,5 @@
+project_name: suse-ai-aws
+rancher_domain: demo.rancher.com
+rancher_server_ip: 35.92.206.37
+ssh_key_name: suse-ai-aws-key
+vpc_cidr: 10.0.0.0/16

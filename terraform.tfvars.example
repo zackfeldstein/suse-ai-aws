@@ -1,0 +1,28 @@
+# AWS Configuration
+aws_region   = "us-west-2"
+project_name = "suse-ai-aws"
+
+# SSH Key Configuration
+# Replace with your actual public key content
+public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC... your-public-key-here"
+
+# Network Configuration
+vpc_cidr           = "10.0.0.0/16"
+public_subnet_cidr = "10.0.1.0/24"
+
+# Rancher Server Configuration (c6i.xlarge with 150GB storage)
+rancher_server_count = 1
+
+# GPU Instance Configuration (g4dn.xlarge with 200GB storage)
+gpu_instance_count = 1
+
+# Optional: Enable detailed monitoring
+enable_detailed_monitoring = false
+
+# Optional: Additional tags for all resources
+additional_tags = {
+  Environment = "development"
+  Owner       = "your-name"
+  Project     = "suse-ai-aws"
+  Purpose     = "rancher-gpu-infrastructure"
+}

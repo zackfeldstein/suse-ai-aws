@@ -1,0 +1,197 @@
+---
+- name: Install Helm
+  shell: |
+    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+    ln -sf /usr/local/bin/helm /usr/bin/helm
+  args:
+    creates: /usr/local/bin/helm
+
+- name: Check if Rancher Prime is enabled
+  set_fact:
+    using_rancher_prime: "{{ rancher_prime_enabled | default(false) }}"
+
+- name: Log into App Collection for Rancher Prime
+  shell: |
+    /usr/local/bin/helm registry login dp.apps.rancher.io/charts -u {{ app_collection_username }} -p {{ app_collection_password }}
+  when: 
+    - using_rancher_prime | bool
+    - app_collection_username is defined
+    - app_collection_password is defined
+
+- name: Create cert-manager namespace
+  shell: /var/lib/rancher/rke2/bin/kubectl create namespace {{ certmanager_namespace | default('cert-manager') }} --dry-run=client -o yaml | /var/lib/rancher/rke2/bin/kubectl apply -f -
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Create app collection secret for cert-manager (Rancher Prime)
+  shell: |
+    /var/lib/rancher/rke2/bin/kubectl -n {{ certmanager_namespace | default('cert-manager') }} create secret docker-registry {{ image_pull_secret_name }} \
+      --docker-server=dp.apps.rancher.io \
+      --docker-username={{ app_collection_username }} \
+      --docker-password={{ app_collection_password }} \
+      --dry-run=client -o yaml | /var/lib/rancher/rke2/bin/kubectl apply -f -
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: 
+    - using_rancher_prime | bool
+    - app_collection_username is defined
+    - app_collection_password is defined
+
+- name: Install cert-manager (Rancher Prime OCI chart)
+  shell: |
+    /usr/local/bin/helm upgrade --install cert-manager {{ certmanager_helm_chart }} \
+      --namespace {{ certmanager_namespace | default('cert-manager') }} \
+      --create-namespace \
+      --set 'global.imagePullSecrets[0].name'={{ image_pull_secret_name }} \
+      --set crds.enabled=true \
+      --version {{ cert_manager_version }}
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: using_rancher_prime | bool
+
+- name: Install cert-manager (Standard)
+  block:
+    - name: Add Jetstack Helm repository for cert-manager
+      shell: |
+        /usr/local/bin/helm repo add jetstack https://charts.jetstack.io
+        /usr/local/bin/helm repo update
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+    - name: Install cert-manager
+      shell: |
+        /usr/local/bin/helm upgrade --install cert-manager jetstack/cert-manager \
+          --namespace {{ certmanager_namespace | default('cert-manager') }} \
+          --create-namespace \
+          --version {{ cert_manager_version }} \
+          --set installCRDs=true
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: not (using_rancher_prime | bool)
+
+- name: Wait for cert-manager to be ready
+  shell: |
+    /var/lib/rancher/rke2/bin/kubectl wait --for=condition=available --timeout=300s deployment/cert-manager -n {{ certmanager_namespace | default('cert-manager') }}
+    /var/lib/rancher/rke2/bin/kubectl wait --for=condition=available --timeout=300s deployment/cert-manager-cainjector -n {{ certmanager_namespace | default('cert-manager') }}
+    /var/lib/rancher/rke2/bin/kubectl wait --for=condition=available --timeout=300s deployment/cert-manager-webhook -n {{ certmanager_namespace | default('cert-manager') }}
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Create cattle-system namespace
+  shell: /var/lib/rancher/rke2/bin/kubectl create namespace cattle-system --dry-run=client -o yaml | /var/lib/rancher/rke2/bin/kubectl apply -f -
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Create self-signed certificate issuer
+  shell: |
+    cat <<EOF | /var/lib/rancher/rke2/bin/kubectl apply -f -
+    apiVersion: cert-manager.io/v1
+    kind: ClusterIssuer
+    metadata:
+      name: selfsigned-issuer
+    spec:
+      selfSigned: {}
+    EOF
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Create self-signed certificate for Rancher
+  shell: |
+    cat <<EOF | /var/lib/rancher/rke2/bin/kubectl apply -f -
+    apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      name: tls-rancher-ingress
+      namespace: cattle-system
+    spec:
+      secretName: tls-rancher-ingress
+      issuerRef:
+        name: selfsigned-issuer
+        kind: ClusterIssuer
+      commonName: {{ rancher_domain }}
+      dnsNames:
+      - {{ rancher_domain }}
+    EOF
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Wait for certificate to be ready
+  shell: |
+    /var/lib/rancher/rke2/bin/kubectl wait --for=condition=ready certificate/tls-rancher-ingress -n cattle-system --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Get the CA certificate from the self-signed issuer
+  shell: |
+    /var/lib/rancher/rke2/bin/kubectl get secret tls-rancher-ingress -n cattle-system -o jsonpath='{.data.ca\.crt}'
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: ca_cert_data
+
+- name: Create tls-ca secret for Rancher
+  shell: |
+    /var/lib/rancher/rke2/bin/kubectl create secret generic tls-ca \
+      --from-literal=cacerts.pem="$(echo '{{ ca_cert_data.stdout }}' | base64 -d)" \
+      -n cattle-system \
+      --dry-run=client -o yaml | /var/lib/rancher/rke2/bin/kubectl apply -f -
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Add Rancher Helm repository
+  shell: |
+    /usr/local/bin/helm repo add rancher-stable https://releases.rancher.com/server-charts/stable
+    /usr/local/bin/helm repo update
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Install Rancher
+  shell: |
+    /usr/local/bin/helm upgrade --install rancher rancher-stable/rancher \
+      --namespace cattle-system \
+      --create-namespace \
+      --set hostname={{ rancher_domain }} \
+      --set bootstrapPassword=admin \
+      --set replicas=1 \
+      --set ingress.tls.source=secret \
+      --set ingress.tls.secretName=tls-rancher-ingress \
+      --set privateCA=true \
+      --version {{ rancher_version }}
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Wait for Rancher deployment to be ready
+  shell: |
+    /var/lib/rancher/rke2/bin/kubectl wait --for=condition=available --timeout=600s deployment/rancher -n cattle-system
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: rancher_wait
+  retries: 3
+  delay: 30
+
+- name: Get Rancher pods status
+  shell: /var/lib/rancher/rke2/bin/kubectl get pods -n cattle-system
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: rancher_pods
+
+- name: Display Rancher pods status
+  debug:
+    msg: "{{ rancher_pods.stdout_lines }}"
+
+- name: Test Rancher endpoint
+  uri:
+    url: "https://{{ rancher_domain }}"
+    method: GET
+    validate_certs: no
+    status_code: [200, 301, 302]
+  register: rancher_test
+  retries: 5
+  delay: 30
+
+- name: Display Rancher access information
+  debug:
+    msg:
+      - "Rancher is now accessible at: https://{{ rancher_domain }}"
+      - "Initial bootstrap password: admin"
+      - "Please change the password after first login!"
+      - "Make sure {{ rancher_domain }} resolves to {{ ansible_host }}"

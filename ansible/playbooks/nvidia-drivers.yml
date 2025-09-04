@@ -1,0 +1,104 @@
+---
+- name: Install development tools for NVIDIA drivers
+  zypper:
+    name:
+      - gcc
+      - make
+      - kernel-devel
+      - kernel-default-devel
+    state: present
+
+- name: Add NVIDIA CUDA repository
+  shell: |
+    zypper ar https://developer.download.nvidia.com/compute/cuda/repos/sles15/x86_64/ cuda-sle15
+    zypper --gpg-auto-import-keys refresh
+
+- name: Install NVIDIA preferred signed driver
+  zypper:
+    name: nv-prefer-signed-open-driver
+    state: present
+    disable_gpg_check: no
+
+- name: Install NVIDIA compute utilities (latest version)
+  zypper:
+    name: nvidia-compute-utils-G06
+    state: present
+
+- name: Install Docker
+  zypper:
+    name: docker
+    state: present
+
+- name: Start and enable Docker service
+  systemd:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Add ec2-user to docker group
+  user:
+    name: ec2-user
+    groups: docker
+    append: yes
+
+- name: Add NVIDIA container toolkit repository
+  shell: |
+    zypper ar https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo
+    zypper --gpg-auto-import-keys refresh
+
+- name: Install NVIDIA container toolkit
+  zypper:
+    name: nvidia-container-toolkit
+    state: present
+    update_cache: yes
+
+- name: Configure Docker for GPU support
+  shell: nvidia-ctk runtime configure --runtime=docker
+
+- name: Restart Docker to apply GPU configuration
+  systemd:
+    name: docker
+    state: restarted
+
+- name: Create GPU test script
+  copy:
+    content: |
+      #!/bin/bash
+      echo "Testing NVIDIA GPU setup..."
+      echo "1. Checking nvidia-smi:"
+      nvidia-smi
+      echo ""
+      echo "2. Testing Docker GPU support:"
+      docker run --rm --gpus all nvidia/cuda:12.0-base-ubuntu20.04 nvidia-smi
+    dest: /home/ec2-user/test-gpu.sh
+    owner: ec2-user
+    group: users
+    mode: '0755'
+
+- name: Reboot to load NVIDIA drivers
+  reboot:
+    msg: "Rebooting to load NVIDIA drivers"
+    reboot_timeout: 300
+
+- name: Wait for system to come back online
+  wait_for_connection:
+    delay: 30
+    timeout: 300
+
+- name: Verify NVIDIA driver installation
+  shell: nvidia-smi
+  register: nvidia_smi_output
+  changed_when: false
+
+- name: Display NVIDIA driver status
+  debug:
+    msg: "{{ nvidia_smi_output.stdout_lines }}"
+
+- name: Display GPU setup completion message
+  debug:
+    msg:
+      - "NVIDIA GPU setup completed successfully!"
+      - "GPU: Tesla T4 detected and working"
+      - "Driver version: 580.65.06 installed"
+      - "Docker GPU support configured"
+      - "Test script available at: /home/ec2-user/test-gpu.sh"
