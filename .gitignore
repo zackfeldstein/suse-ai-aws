@@ -52,3 +52,16 @@ Thumbs.db
 ansible/group_vars/secrets.yml
 **/secrets.yml
 
+# Terraform state files (contain sensitive data)
+*.tfstate
+*.tfstate.*
+terraform.tfstate*
+
+# Temporary ansible files
+ansible/terraform.tfstate*
+ansible/*.tfstate*
+
+# RKE2 tokens and cluster configs
+**/gpu-rke2-simple.yml
+**/rke2-tokens.yml
+
