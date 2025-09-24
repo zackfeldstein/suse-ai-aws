@@ -175,24 +175,8 @@ After deployment, you'll receive:
 - **Rancher UI URLs** (after Rancher installation)
 - **Deployment summary** with full specifications
 
-## 🐳 Post-Deployment: Installing Rancher
 
-After your Rancher server is running, install Rancher:
 
-```bash
-# SSH into your Rancher server
-ssh -i ~/.ssh/your-private-key ec2-user@<rancher-server-ip>
-
-# Install Rancher (latest stable)
-sudo docker run -d --restart=unless-stopped \
-  -p 80:80 -p 443:443 \
-  --privileged \
-  rancher/rancher:latest
-```
-
-Access Rancher UI at: `https://<rancher-server-ip>`
-
-## 🎮 GPU Driver Installation
 
 The GPU instances automatically install NVIDIA drivers using the SUSE Linux Enterprise Server optimized method:
 
