@@ -1,32 +1,32 @@
-# SUSE AI AWS Terraform Infrastructure
+# SUSE AI AWS Infrastructure with RKE2 and Rancher
 
-This Terraform configuration deploys a complete infrastructure on AWS with Rancher server and GPU-enabled instances for AI/ML workloads.
+This project deploys a complete Kubernetes infrastructure on AWS using Terraform and Ansible, featuring RKE2 clusters, Rancher management platform, and NVIDIA GPU support for AI/ML workloads.
 
 ## 🏗️ Infrastructure Overview
 
-### **Rancher Server (VM Type 1)**
+### **Rancher Management Server**
 - **Instance Type**: `c6i.xlarge` (4 vCPU, 8GB RAM)
 - **Storage**: 150GB encrypted GP3 volume
-- **Purpose**: Container orchestration platform
-- **Ports**: SSH (22), HTTP (80), HTTPS (443), Rancher UI (8080, 8443)
+- **Operating System**: SUSE Linux Enterprise Server 15 SP7
+- **Purpose**: Runs RKE2 single-node cluster + Rancher Prime for Kubernetes management
+- **Access**: `https://demo.rancher.com`
 
-### **GPU Instances (VM Type 2)**
+### **GPU Workload Cluster**
 - **Instance Type**: `g4dn.xlarge` (4 vCPU, 16GB RAM, 1x NVIDIA T4)
-- **Operating System**: SUSE Linux Enterprise Server 15
+- **Operating System**: SUSE Linux Enterprise Server 15 SP7
 - **Storage**: 200GB encrypted GP3 volume
-- **Purpose**: GPU-accelerated ML/AI workloads
-- **Ports**: SSH (22), HTTP (80), HTTPS (443), Jupyter/ML services (8888-8892)
-- **NVIDIA Drivers**: Automatically installed using SUSE-specific method
+- **Purpose**: Standalone RKE2 cluster optimized for GPU workloads
+- **Features**: NVIDIA drivers, GPU device plugin, local-path storage
 
 ### **Networking**
 - **Custom VPC** with configurable CIDR (default: 10.0.0.0/16)
 - **Public subnet** with internet gateway access
-- **Separate security groups** for Rancher and GPU instances
-- **Automatic public IP assignment**
+- **Security groups** configured for RKE2 and Rancher access
+- **DNS resolution** via `/etc/hosts` for demo.rancher.com
 
 ## 🚀 Quick Start
 
-### Phase 1: Infrastructure Deployment
+### Phase 1: Infrastructure Deployment with Terraform
 
 1. **Prerequisites**
    - AWS CLI configured with appropriate credentials
@@ -67,23 +67,48 @@ This Terraform configuration deploys a complete infrastructure on AWS with Ranch
    ./generate-inventory.sh
    ```
 
-6. **Configure SUSE App Collection credentials**:
+6. **Configure credentials** (optional, for Rancher Prime):
    ```bash
    cd ansible
    cp group_vars/secrets.yml.example group_vars/secrets.yml
    # Edit secrets.yml with your SUSE App Collection credentials
    ```
 
-7. **Configure all systems**
+7. **Deploy RKE2 clusters, Rancher, and NVIDIA drivers**
    ```bash
+   cd ansible
    ansible-playbook -i inventory.ini site.yml
    ```
 
-8. **Access Rancher Prime**
-   - URL: https://demo.rancher.com
-   - Username: admin
-   - Password: admin (change immediately!)
-   - Edition: Rancher Prime with enterprise features
+### Phase 3: Access Your Clusters
+
+8. **Access Rancher Management UI**
+   - URL: `https://demo.rancher.com`
+   - Username: `admin`
+   - Password: `admin` (change immediately!)
+
+9. **Access GPU Cluster** (optional - for direct kubectl access)
+   ```bash
+   ssh ec2-user@<gpu-instance-ip>
+   kubectl --kubeconfig=/etc/rancher/rke2/rke2.yaml get nodes
+   ```
+
+## 🎯 What Gets Deployed
+
+### Rancher Management Cluster
+- **RKE2 single-node cluster** (control-plane + etcd + master)
+- **Rancher Prime** container management platform
+- **cert-manager** with self-signed certificates
+- **local-path storage** as default storage class
+- **Single replica** deployment optimized for demo/dev
+
+### GPU Workload Cluster  
+- **Standalone RKE2 cluster** (separate from Rancher)
+- **NVIDIA Tesla T4** GPU with drivers installed
+- **NVIDIA GPU device plugin** for Kubernetes
+- **local-path storage** provisioner
+- **Docker with GPU support** (nvidia-container-toolkit)
+- **Ready for GPU workloads** (PyTorch, TensorFlow, etc.)
 
 ## 🔐 AWS Configuration
 
@@ -108,27 +133,12 @@ aws sts get-caller-identity
 export AWS_ACCESS_KEY_ID="your-access-key"
 export AWS_SECRET_ACCESS_KEY="your-secret-key"
 export AWS_DEFAULT_REGION="us-west-2"
-
-# Make persistent (add to ~/.zshrc or ~/.bashrc)
-echo 'export AWS_ACCESS_KEY_ID="your-access-key"' >> ~/.zshrc
-echo 'export AWS_SECRET_ACCESS_KEY="your-secret-key"' >> ~/.zshrc
-echo 'export AWS_DEFAULT_REGION="us-west-2"' >> ~/.zshrc
 ```
 
 ### **Getting AWS Credentials**
 1. **AWS Console** → **IAM** → **Users** → **Create User**
 2. **Attach policies**: `AmazonEC2FullAccess`, `AmazonVPCFullAccess`, `IAMReadOnlyAccess`
 3. **Security credentials** → **Create access key** → **Download**
-
-### **Test Your Configuration**
-```bash
-# Verify AWS access
-aws sts get-caller-identity
-
-# Test Terraform
-terraform init
-terraform plan
-```
 
 ## ⚙️ Configuration Variables
 
@@ -142,152 +152,90 @@ terraform plan
 | `rancher_server_count` | Number of Rancher servers (0-5) | `1` | number |
 | `gpu_instance_count` | Number of GPU instances (0-10) | `1` | number |
 | `enable_detailed_monitoring` | Enable CloudWatch detailed monitoring | `false` | bool |
-| `additional_tags` | Additional tags for resources | `{}` | map(string) |
 
-## 📊 Instance Specifications
+## 📊 Cluster Specifications
 
-### Rancher Server (c6i.xlarge)
-- **vCPUs**: 4
-- **Memory**: 8 GiB
-- **Storage**: 150GB GP3 (encrypted)
-- **Network**: Up to 12.5 Gbps
-- **Use Case**: Container orchestration, Kubernetes management
-- **Pre-installed**: Docker, Docker Compose
+### Rancher Management Cluster
+- **Kubernetes**: v1.28.5+rke2r1
+- **Rancher**: v2.11.3 (Prime edition ready)
+- **Storage**: local-path provisioner
+- **Networking**: Flannel CNI
+- **Access**: HTTPS with self-signed certs
 
-### GPU Instance (g4dn.xlarge)
-- **vCPUs**: 4
-- **Memory**: 16 GiB
-- **GPU**: 1x NVIDIA T4 (16GB GPU memory)
-- **Storage**: 200GB GP3 (encrypted)
-- **Network**: Up to 25 Gbps
-- **Operating System**: SUSE Linux Enterprise Server 15
-- **Use Case**: Machine learning, AI training, GPU computing
-- **Pre-installed**: NVIDIA drivers (SUSE-optimized), Docker with GPU support, nvidia-container-toolkit
+### GPU Workload Cluster
+- **Kubernetes**: v1.32.7+rke2r1
+- **GPU**: NVIDIA T4 (16GB VRAM)
+- **Drivers**: NVIDIA 580.65.06 with CUDA 13.0
+- **Storage**: local-path provisioner (default)
+- **GPU Plugin**: NVIDIA k8s-device-plugin v0.14.5
 
-## 🔌 Outputs
+## 🎮 GPU Testing
 
-After deployment, you'll receive:
+After deployment, test GPU functionality:
 
-- **VPC and networking details**
-- **Instance information** (IDs, IPs, DNS names)
-- **SSH connection commands**
-- **Web URLs** for basic instance info
-- **Rancher UI URLs** (after Rancher installation)
-- **Deployment summary** with full specifications
-
-
-
-
-The GPU instances automatically install NVIDIA drivers using the SUSE Linux Enterprise Server optimized method:
-
-```bash
-# Add NVIDIA CUDA repository for SLES15
-zypper ar https://developer.download.nvidia.com/compute/cuda/repos/sles15/x86_64/ cuda-sle15
-zypper --gpg-auto-import-keys refresh
-
-# Install preferred signed driver
-zypper install -y --auto-agree-with-licenses nv-prefer-signed-open-driver
-
-# Get driver version and install compute utilities
-version=$(rpm -qa --queryformat '%{VERSION}\n' nv-prefer-signed-open-driver | cut -d "_" -f1 | sort -u | tail -n 1)
-zypper install -y --auto-agree-with-licenses nvidia-compute-utils-G06=${version}
-```
-
-After deployment, you can verify GPU functionality:
 ```bash
 # SSH into GPU instance
-ssh -i ~/.ssh/your-private-key ec2-user@<gpu-instance-ip>
+ssh ec2-user@<gpu-instance-ip>
 
 # Check GPU status
 nvidia-smi
 
-# Test Docker GPU support
-sudo docker run --rm --gpus all nvidia/cuda:11.8-base-ubuntu20.04 nvidia-smi
+# Test Kubernetes GPU resources
+kubectl --kubeconfig=/etc/rancher/rke2/rke2.yaml describe nodes | grep nvidia.com/gpu
+
+# Run GPU test script
+./test-gpu.sh
 ```
 
-## 🎯 Usage Scenarios
+## 🔗 Importing GPU Cluster into Rancher
 
-### Development Environment
-```hcl
-rancher_server_count = 1
-gpu_instance_count = 1
-```
+To manage your GPU cluster through Rancher:
 
-### Production Setup
-```hcl
-rancher_server_count = 3  # HA setup
-gpu_instance_count = 5    # Multiple GPU workers
-enable_detailed_monitoring = true
-```
-
-### ML Training Cluster
-```hcl
-rancher_server_count = 1
-gpu_instance_count = 10   # Maximum GPU instances
-```
-
-## 🔒 Security Features
-
-- **Encrypted storage** for all EBS volumes
-- **Separate security groups** for different instance types
-- **SSH key-based authentication**
-- **HTTPS-ready** configurations
-- **VPC isolation** with custom networking
-
-### Security Group Rules
-
-**Rancher Server**:
-- SSH (22), HTTP (80), HTTPS (443)
-- Rancher UI (8080, 8443)
-
-**GPU Instances**:
-- SSH (22), HTTP (80), HTTPS (443)
-- Jupyter/ML services (8888-8892)
-
-## 💰 Cost Estimation (us-west-2)
-
-- **c6i.xlarge**: ~$0.192/hour
-- **g4dn.xlarge**: ~$0.526/hour
-
-**Example monthly costs**:
-- 1 Rancher + 1 GPU: ~$516/month
-- 1 Rancher + 5 GPU: ~$1,958/month
-
-*Prices subject to change. Monitor AWS billing dashboard.*
+1. Access Rancher UI at `https://demo.rancher.com`
+2. Go to **Cluster Management** → **Import Existing**
+3. Follow the import wizard using the GPU cluster details
+4. Use the node token displayed during deployment
 
 ## 🛠️ Troubleshooting
 
 ### Common Issues
 
-1. **GPU drivers not loading**
-   - Check instance state: `nvidia-smi`
-   - Reboot instance if needed
-   - Verify g4dn.xlarge availability in region
+1. **RKE2 not starting**
+   ```bash
+   sudo systemctl status rke2-server
+   sudo journalctl -u rke2-server -f
+   ```
 
-2. **Rancher UI not accessible**
-   - Check security group rules
-   - Verify Docker container status
-   - Allow time for initial setup (5-10 minutes)
+2. **Rancher pod stuck creating**
+   - Check if `tls-ca` secret exists
+   - Verify cert-manager is running
+   - Check storage class availability
 
-3. **SSH connection fails**
-   - Verify public key format
-   - Check security group SSH rules
-   - Ensure instance is in "running" state
+3. **GPU not detected**
+   ```bash
+   nvidia-smi
+   sudo systemctl status rke2-server
+   kubectl get nodes -o yaml | grep nvidia
+   ```
+
+4. **DNS resolution issues**
+   - Verify `/etc/hosts` contains demo.rancher.com entry
+   - Check security group allows HTTPS (443)
 
 ### Useful Commands
 
 ```bash
-# Check GPU status
-nvidia-smi
+# Check RKE2 cluster status
+kubectl --kubeconfig=/etc/rancher/rke2/rke2.yaml get nodes -o wide
 
-# Check Docker status
-sudo systemctl status docker
+# Check Rancher pods
+kubectl --kubeconfig=/etc/rancher/rke2/rke2.yaml get pods -n cattle-system
 
-# View Rancher container logs
-sudo docker logs <container-id>
+# Check GPU device plugin
+kubectl --kubeconfig=/etc/rancher/rke2/rke2.yaml get pods -n kube-system | grep nvidia
 
-# Check instance metadata
-curl http://169.254.169.254/latest/meta-data/
+# View RKE2 logs
+sudo journalctl -u rke2-server -f
 ```
 
 ## 🧹 Cleanup
@@ -298,20 +246,35 @@ To destroy all resources:
 terraform destroy
 ```
 
-**Warning**: This will permanently delete all instances and data.
+**Warning**: This will permanently delete all instances, clusters, and data.
 
 ## 📋 What's Included
 
-- ✅ Custom VPC with public subnet
-- ✅ Internet gateway and routing
-- ✅ Security groups with appropriate rules
-- ✅ SSH key pair management
-- ✅ Encrypted EBS volumes
-- ✅ Instance initialization scripts
-- ✅ Comprehensive outputs
-- ✅ Cost-optimized GP3 storage
-- ✅ GPU driver installation
-- ✅ Docker with GPU support
+- ✅ **Terraform**: AWS infrastructure (VPC, EC2, Security Groups)
+- ✅ **Ansible**: Automated software deployment and configuration
+- ✅ **RKE2**: Production-ready Kubernetes clusters
+- ✅ **Rancher**: Kubernetes management platform
+- ✅ **NVIDIA Support**: GPU drivers and Kubernetes device plugin
+- ✅ **Storage**: local-path provisioner for persistent volumes
+- ✅ **Security**: Encrypted storage, security groups, SSH keys
+- ✅ **DNS**: Custom domain resolution for Rancher access
+
+## 🎯 Use Cases
+
+- **AI/ML Development**: GPU-accelerated training and inference
+- **Kubernetes Learning**: Multi-cluster management with Rancher
+- **Edge Computing**: Lightweight RKE2 clusters
+- **Container Orchestration**: Production-ready Kubernetes setup
+- **Hybrid Cloud**: Import existing clusters into Rancher
+
+## 💰 Cost Estimation (us-west-2)
+
+- **c6i.xlarge**: ~$0.192/hour (~$138/month)
+- **g4dn.xlarge**: ~$0.526/hour (~$378/month)
+
+**Total for default setup**: ~$516/month
+
+*Prices subject to change. Monitor AWS billing dashboard.*
 
 ## 🤝 Contributing
 
